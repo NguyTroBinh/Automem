@@ -1,1 +1,1 @@
-Clone fromm https://github.com/verygoodplugins/automem
+Clone from https://github.com/verygoodplugins/automem
