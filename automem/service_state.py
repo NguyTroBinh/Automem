@@ -59,7 +59,6 @@ class ServiceState:
     falkordb: Optional[FalkorDB] = None
     memory_graph: Any = None
     qdrant: Optional[QdrantClient] = None
-    openai_client: Any = None  # Keep for backward compatibility (type classification, etc.)
     embedding_provider: Optional[EmbeddingProvider] = None
     enrichment_queue: Optional[Queue] = None
     enrichment_thread: Optional[Thread] = None

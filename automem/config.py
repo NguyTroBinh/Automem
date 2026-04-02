@@ -12,7 +12,7 @@ load_dotenv(Path.home() / ".config" / "automem" / ".env")
 
 # Qdrant / FalkorDB configuration
 COLLECTION_NAME = os.getenv("QDRANT_COLLECTION", "memories")
-VECTOR_SIZE = int(os.getenv("VECTOR_SIZE") or os.getenv("QDRANT_VECTOR_SIZE", "1024"))
+VECTOR_SIZE = int(os.getenv("VECTOR_SIZE") or os.getenv("QDRANT_VECTOR_SIZE", "1024"))  # AITeamVN/Vietnamese_Embedding outputs 1024d
 QDRANT_PORT: int = int(os.getenv("QDRANT_PORT", "6333"))
 QDRANT_API_KEY: str | None = os.getenv("QDRANT_API_KEY")
 
@@ -102,15 +102,10 @@ JIT_ENRICHMENT_ENABLED = os.getenv("JIT_ENRICHMENT_ENABLED", "true").lower() not
 }
 
 # Model configuration
-# voyage-4 (1024d): Recommended default via EMBEDDING_PROVIDER=auto
-# text-embedding-3-small (1536d native): OpenAI fallback; truncated to VECTOR_SIZE via
-#   Matryoshka when the upstream API supports the ``dimensions`` parameter.
-#   For OpenAI-compatible endpoints that don't support ``dimensions``, the model
-#   returns its native 1536-d output and VECTOR_SIZE is ignored.
-#   If VECTOR_SIZE > 1536, auto-upgrades to text-embedding-3-large.
-# text-embedding-3-large: OpenAI high-precision, use VECTOR_SIZE=3072
-EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "text-embedding-3-small")
-CLASSIFICATION_MODEL = os.getenv("CLASSIFICATION_MODEL", "gpt-4o-mini")
+# Embedding: AITeamVN/Vietnamese_Embedding (1024d) loaded locally on CUDA
+# Classification: local Ollama LLM (default: llama3)
+EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "AITeamVN/Vietnamese_Embedding")
+CLASSIFICATION_MODEL = os.getenv("CLASSIFICATION_MODEL", os.getenv("OLLAMA_CLASSIFICATION_MODEL", "llama3"))
 
 RECALL_RELATION_LIMIT = int(os.getenv("RECALL_RELATION_LIMIT", "5"))
 RECALL_EXPANSION_LIMIT = int(os.getenv("RECALL_EXPANSION_LIMIT", "25"))
@@ -435,3 +430,8 @@ SEARCH_WEIGHT_RELEVANCE = float(os.getenv("SEARCH_WEIGHT_RELEVANCE", "0.0"))
 # API tokens
 API_TOKEN = os.getenv("AUTOMEM_API_TOKEN")
 ADMIN_TOKEN = os.getenv("ADMIN_API_TOKEN")
+
+# Ollama configuration
+OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
+OLLAMA_CLASSIFICATION_MODEL = os.getenv("OLLAMA_CLASSIFICATION_MODEL", "llama3")
+OLLAMA_EMBEDDING_MODEL = os.getenv("OLLAMA_EMBEDDING_MODEL", "nomic-embed-text")

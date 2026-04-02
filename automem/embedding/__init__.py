@@ -1,33 +1,16 @@
 """Embedding provider module for AutoMem.
 
-Provides abstraction over different embedding backends:
-- OpenAI (API-based, requires key)
-- Ollama (local server)
-- FastEmbed (local model, no API key needed)
-- Placeholder (hash-based fallback)
+Backends:
+- HuggingFaceLocalProvider: AITeamVN/Vietnamese_Embedding on CUDA (default)
+- OllamaEmbeddingProvider: Ollama local server (fallback, set EMBEDDING_PROVIDER=ollama)
 """
 
 from .provider import EmbeddingProvider
-
-# Optional backends: guard imports to avoid hard dependencies at import time
-try:
-    from .openai import OpenAIEmbeddingProvider  # type: ignore
-except ImportError:
-    OpenAIEmbeddingProvider = None  # type: ignore[assignment]
-try:
-    from .fastembed import FastEmbedProvider  # type: ignore
-except ImportError:
-    FastEmbedProvider = None  # type: ignore[assignment]
-try:
-    from .ollama import OllamaEmbeddingProvider  # type: ignore
-except ImportError:
-    OllamaEmbeddingProvider = None  # type: ignore[assignment]
-from .placeholder import PlaceholderEmbeddingProvider
+from .hf_local import HuggingFaceLocalProvider
+from .ollama import OllamaEmbeddingProvider
 
 __all__ = [
     "EmbeddingProvider",
-    "FastEmbedProvider",
+    "HuggingFaceLocalProvider",
     "OllamaEmbeddingProvider",
-    "OpenAIEmbeddingProvider",
-    "PlaceholderEmbeddingProvider",
 ]

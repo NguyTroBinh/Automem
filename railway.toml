@@ -1,8 +1,0 @@
-# railway.toml - Remove the startCommand completely
-[build]
-builder = "DOCKERFILE"
-
-[deploy]
-# Remove startCommand - let Docker image use its default
-restartPolicyType = "ON_FAILURE"
-restartPolicyMaxRetries = 10
