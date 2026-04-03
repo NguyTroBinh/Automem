@@ -1,9 +1,4 @@
-"""HuggingFace local embedding provider.
-
-Dùng sentence-transformers làm backend chính (tự chọn device cuda/cpu).
-Nếu sentence-transformers không load được (ví dụ torch bị AppLocker chặn),
-tự động fallback sang Ollama embedding.
-"""
+"""HuggingFace local embedding provider."""
 
 from __future__ import annotations
 

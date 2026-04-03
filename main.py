@@ -282,6 +282,7 @@ def main() -> None:
     print("Đang khởi tạo AutoMem...", end=" ", flush=True)
     try:
         core = _build_core()
+        core.start_consolidation_scheduler()
         print("OK")
     except Exception as e:
         print(f"FAILED\n[Cảnh báo] AutoMem không khởi tạo được: {e}")

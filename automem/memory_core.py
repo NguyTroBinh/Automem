@@ -441,15 +441,87 @@ class MemoryCore:
             run_consolidation_tick,
         )
         from automem.consolidation.runtime_helpers import (
-            build_scheduler_from_graph,
             persist_consolidation_run,
+            load_control_record,
+            apply_scheduler_overrides,
+            build_consolidator_from_config,
         )
+        from automem.config import (
+            CONSOLIDATION_DECAY_INTERVAL_SECONDS,
+            CONSOLIDATION_CREATIVE_INTERVAL_SECONDS,
+            CONSOLIDATION_CLUSTER_INTERVAL_SECONDS,
+            CONSOLIDATION_FORGET_INTERVAL_SECONDS,
+            CONSOLIDATION_DELETE_THRESHOLD,
+            CONSOLIDATION_ARCHIVE_THRESHOLD,
+            CONSOLIDATION_GRACE_PERIOD_DAYS,
+            CONSOLIDATION_IMPORTANCE_PROTECTION_THRESHOLD,
+            CONSOLIDATION_PROTECTED_TYPES,
+            CONSOLIDATION_BASE_DECAY_RATE,
+            CONSOLIDATION_IMPORTANCE_FLOOR_FACTOR,
+            CONSOLIDATION_HISTORY_LIMIT,
+            CONSOLIDATION_CONTROL_LABEL,
+            CONSOLIDATION_RUN_LABEL,
+            CONSOLIDATION_CONTROL_NODE_ID,
+            CONSOLIDATION_TASK_FIELDS,
+        )
+
+        def _build_scheduler_from_graph(graph: Any) -> Any:
+            try:
+                from automem.consolidation.consolidator import MemoryConsolidator
+            except ImportError:
+                self.logger.warning("MemoryConsolidator not found, consolidation disabled")
+                return None
+            control = load_control_record(
+                graph,
+                logger=self.logger,
+                control_label=CONSOLIDATION_CONTROL_LABEL,
+                control_node_id=CONSOLIDATION_CONTROL_NODE_ID,
+                task_fields=CONSOLIDATION_TASK_FIELDS,
+                utc_now_fn=utc_now,
+            )
+            if control is None:
+                return None
+
+            consolidator = build_consolidator_from_config(
+                graph,
+                self.get_qdrant_client(),
+                memory_consolidator_cls=MemoryConsolidator,
+                delete_threshold=CONSOLIDATION_DELETE_THRESHOLD,
+                archive_threshold=CONSOLIDATION_ARCHIVE_THRESHOLD,
+                grace_period_days=CONSOLIDATION_GRACE_PERIOD_DAYS,
+                importance_protection_threshold=CONSOLIDATION_IMPORTANCE_PROTECTION_THRESHOLD,
+                protected_types=CONSOLIDATION_PROTECTED_TYPES,
+                base_decay_rate=CONSOLIDATION_BASE_DECAY_RATE,
+                importance_floor_factor=CONSOLIDATION_IMPORTANCE_FLOOR_FACTOR,
+            )
+
+            apply_scheduler_overrides(
+                consolidator,
+                decay_interval_seconds=CONSOLIDATION_DECAY_INTERVAL_SECONDS,
+                creative_interval_seconds=CONSOLIDATION_CREATIVE_INTERVAL_SECONDS,
+                cluster_interval_seconds=CONSOLIDATION_CLUSTER_INTERVAL_SECONDS,
+                forget_interval_seconds=CONSOLIDATION_FORGET_INTERVAL_SECONDS,
+            )
+            return consolidator
+
+        def _persist_run(graph: Any, result: Any) -> None:
+            persist_consolidation_run(
+                graph,
+                result,
+                logger=self.logger,
+                run_label=CONSOLIDATION_RUN_LABEL,
+                control_label=CONSOLIDATION_CONTROL_LABEL,
+                control_node_id=CONSOLIDATION_CONTROL_NODE_ID,
+                task_fields=CONSOLIDATION_TASK_FIELDS,
+                history_limit=CONSOLIDATION_HISTORY_LIMIT,
+                utc_now_fn=utc_now,
+            )
 
         def _tick() -> None:
             run_consolidation_tick(
                 get_memory_graph_fn=self.get_memory_graph,
-                build_scheduler_from_graph_fn=build_scheduler_from_graph,
-                persist_consolidation_run_fn=persist_consolidation_run,
+                build_scheduler_from_graph_fn=_build_scheduler_from_graph,
+                persist_consolidation_run_fn=_persist_run,
                 decay_importance_threshold=CONSOLIDATION_DECAY_IMPORTANCE_THRESHOLD,
                 emit_event_fn=self._emit_event,
                 utc_now_fn=utc_now,
