@@ -4,7 +4,7 @@ import re
 import uuid
 from collections import Counter
 from datetime import datetime, timedelta, timezone
-from typing import Any, Callable, Dict, List, Set, Tuple
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
 
 def temporal_cutoff() -> str:
@@ -20,25 +20,45 @@ def find_temporal_relationships(
     cutoff_fn: Callable[[], str],
     utc_now_fn: Callable[[], str],
     logger: Any,
+    tenant_id: Optional[str] = None,
+    user_id: Optional[str] = None,
 ) -> int:
     """Find and create temporal relationships with recent memories."""
     created = 0
+
+    # --- Build tenant WHERE fragment ---
+    tenant_clauses: list[str] = []
+    tenant_params: Dict[str, Any] = {}
+    if tenant_id is not None:
+        tenant_clauses.append("m2.tenant_id = $tenant_id")
+        tenant_params["tenant_id"] = tenant_id
+    if user_id is not None:
+        tenant_clauses.append("m2.user_id = $user_id")
+        tenant_params["user_id"] = user_id
+    extra_where = (" AND " + " AND ".join(tenant_clauses)) if tenant_clauses else ""
+
     try:
+        params: Dict[str, Any] = {
+            "id": memory_id,
+            "limit": limit,
+            "cutoff": cutoff_fn(),
+            **tenant_params,
+        }
         result = graph.query(
-            """
-            MATCH (m1:Memory {id: $id})
+            f"""
+            MATCH (m1:Memory {{id: $id}})
             WITH m1, m1.timestamp AS ts
             WHERE ts IS NOT NULL
             MATCH (m2:Memory)
             WHERE m2.id <> $id
                 AND m2.timestamp IS NOT NULL
                 AND m2.timestamp < ts
-                AND m2.timestamp > $cutoff
+                AND m2.timestamp > $cutoff{extra_where}
             RETURN m2.id
             ORDER BY m2.timestamp DESC
             LIMIT $limit
             """,
-            {"id": memory_id, "limit": limit, "cutoff": cutoff_fn()},
+            params,
             timeout=5000,
         )
 
@@ -80,22 +100,35 @@ def detect_patterns(
     search_stopwords: Set[str],
     utc_now_fn: Callable[[], str],
     logger: Any,
+    tenant_id: Optional[str] = None,
+    user_id: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     """Detect if this memory exemplifies or creates patterns."""
     detected: List[Dict[str, Any]] = []
 
+    # --- Build tenant WHERE fragment ---
+    tenant_clauses: list[str] = []
+    tenant_params: Dict[str, Any] = {}
+    if tenant_id is not None:
+        tenant_clauses.append("m.tenant_id = $tenant_id")
+        tenant_params["tenant_id"] = tenant_id
+    if user_id is not None:
+        tenant_clauses.append("m.user_id = $user_id")
+        tenant_params["user_id"] = user_id
+    extra_where = (" AND " + " AND ".join(tenant_clauses)) if tenant_clauses else ""
+
     try:
         memory_type, confidence = classify_fn(content)
         result = graph.query(
-            """
+            f"""
             MATCH (m:Memory)
             WHERE m.type = $type
                 AND m.id <> $id
-                AND m.confidence > 0.5
+                AND m.confidence > 0.5{extra_where}
             RETURN m.id, m.content
             LIMIT 10
             """,
-            {"type": memory_type, "id": memory_id},
+            {"type": memory_type, "id": memory_id, **tenant_params},
         )
 
         similar_texts = [content]
@@ -184,6 +217,8 @@ def link_semantic_neighbors(
     similarity_threshold: float,
     utc_now_fn: Callable[[], str],
     logger: Any,
+    tenant_id: Optional[str] = None,
+    user_id: Optional[str] = None,
 ) -> List[Tuple[str, float]]:
     client = get_qdrant_client_fn()
     if client is None:
@@ -205,12 +240,20 @@ def link_semantic_neighbors(
 
     query_vector = points[0].vector
 
+    # --- Build tenant filter for Qdrant search ---
+    search_filter = None
+    if tenant_id is not None or user_id is not None:
+        from automem.utils.tenant import build_qdrant_tenant_filter
+        from qdrant_client import models as qdrant_models
+        search_filter = build_qdrant_tenant_filter(tenant_id, user_id, qdrant_models)
+
     try:
         neighbors = client.search(
             collection_name=collection_name,
             query_vector=query_vector,
             limit=similarity_limit + 1,
             with_payload=False,
+            query_filter=search_filter,
         )
     except Exception:
         logger.exception("Semantic neighbor search failed for %s", memory_id)

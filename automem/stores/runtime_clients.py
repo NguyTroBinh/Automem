@@ -4,6 +4,16 @@ import os
 from typing import Any, Callable
 
 
+def _ensure_graph_tenant_indexes(graph: Any, logger: Any) -> None:
+    """Create FalkorDB indexes on tenant_id and user_id for Memory nodes (idempotent)."""
+    for prop in ("tenant_id", "user_id"):
+        try:
+            graph.query(f"CREATE INDEX FOR (m:Memory) ON (m.{prop})")
+        except Exception:
+            # Index may already exist — that's fine
+            logger.debug("Index on Memory.%s may already exist", prop)
+
+
 def init_falkordb(
     *,
     state: Any,
@@ -40,6 +50,8 @@ def init_falkordb(
             "FalkorDB connection established (auth: %s)",
             "enabled" if password else "disabled",
         )
+        # Ensure indexes for multi-tenancy filtering
+        _ensure_graph_tenant_indexes(state.memory_graph, logger)
     except Exception:  # pragma: no cover
         logger.exception("Failed to initialize FalkorDB connection")
         state.falkordb = None
@@ -143,28 +155,21 @@ def ensure_qdrant_collection(
             )
 
         logger.info("Ensuring Qdrant payload indexes for collection '%s'", collection_name)
+        _index_fields = ["tags", "tag_prefixes", "tenant_id", "user_id"]
         if payload_schema_type_enum:
-            state.qdrant.create_payload_index(
-                collection_name=collection_name,
-                field_name="tags",
-                field_schema=payload_schema_type_enum.KEYWORD,
-            )
-            state.qdrant.create_payload_index(
-                collection_name=collection_name,
-                field_name="tag_prefixes",
-                field_schema=payload_schema_type_enum.KEYWORD,
-            )
+            for _field in _index_fields:
+                state.qdrant.create_payload_index(
+                    collection_name=collection_name,
+                    field_name=_field,
+                    field_schema=payload_schema_type_enum.KEYWORD,
+                )
         else:
-            state.qdrant.create_payload_index(
-                collection_name=collection_name,
-                field_name="tags",
-                field_schema="keyword",
-            )
-            state.qdrant.create_payload_index(
-                collection_name=collection_name,
-                field_name="tag_prefixes",
-                field_schema="keyword",
-            )
+            for _field in _index_fields:
+                state.qdrant.create_payload_index(
+                    collection_name=collection_name,
+                    field_name=_field,
+                    field_schema="keyword",
+                )
     except ValueError:
         raise
     except Exception:  # pragma: no cover

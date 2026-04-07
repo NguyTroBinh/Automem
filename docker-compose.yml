@@ -1,0 +1,50 @@
+version: "3.8"
+
+services:
+  # ───────────────────────────────────────────
+  # Qdrant — Vector Database (embedding search)
+  # ───────────────────────────────────────────
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: automem-qdrant
+    restart: unless-stopped
+    ports:
+      - "6333:6333"   # REST API
+      - "6334:6334"   # gRPC
+    volumes:
+      - qdrant_data:/qdrant/storage
+    environment:
+      - QDRANT__SERVICE__GRPC_PORT=6334
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:6333/healthz || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  # ───────────────────────────────────────────
+  # FalkorDB — Graph Database (keyword search)
+  # ───────────────────────────────────────────
+  falkordb:
+    image: falkordb/falkordb:latest
+    container_name: automem-falkordb
+    restart: unless-stopped
+    ports:
+      - "6379:6379"   # Redis-compatible protocol
+      - "3000:3000"   # FalkorDB Browser (dashboard UI)
+    volumes:
+      - falkordb_data:/data
+    environment:
+      - FALKORDB_ARGS=--save 60 1       # RDB snapshot mỗi 60s nếu có ≥1 write
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+
+volumes:
+  qdrant_data:
+    driver: local
+  falkordb_data:
+    driver: local

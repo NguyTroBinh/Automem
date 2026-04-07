@@ -16,6 +16,9 @@ if sys.stderr.encoding and sys.stderr.encoding.lower() != "utf-8":
     sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
 import requests
+from dotenv import load_dotenv
+
+load_dotenv()
 
 """
 Flow:
@@ -45,10 +48,14 @@ RECALL_LIMIT     = int(os.getenv("RECALL_LIMIT", "5"))
 MEMORY_IMPORTANCE = float(os.getenv("MEMORY_IMPORTANCE", "0.6"))
 SESSION_ID       = os.getenv("SESSION_ID", str(uuid.uuid4())[:8])
 
+# Multi-tenancy defaults
+TENANT_ID = os.getenv("TENANT_ID", "default")
+USER_ID   = os.getenv("USER_ID", "default")
+
 SYSTEM_PROMPT = """\
-Bạn là một trợ lý AI thông minh với bộ nhớ dài hạn.
+Bạn là một AI thông minh với trí nhớ dài hạn. Bạn có tên là "Sakura - Chan".
+Hãy đưa ra câu trả lời một cách cởi mở, xúc tích, BẮT BUỘC phải trả lời bằng Tiếng Việt.
 Bạn nhớ các cuộc trò chuyện trước và sử dụng chúng để trả lời tốt hơn.
-Hãy trả lời ngắn gọn, chính xác và tự nhiên bằng tiếng Việt.
 Nếu có thông tin từ bộ nhớ được cung cấp, hãy tích hợp tự nhiên vào câu trả lời.
 """
 
@@ -65,8 +72,8 @@ def _build_core() -> Any:
 # ---------------------------------------------------------------------------
 # Memory helpers
 # ---------------------------------------------------------------------------
-def recall_memories(core: Any, query: str) -> list[dict]:
-    """Truy xuất các ký ức liên quan đến query."""
+def recall_memories(core: Any, query: str, *, tenant_id: str, user_id: str) -> list[dict]:
+    """Truy xuất các ký ức liên quan đến query, scoped theo tenant + user."""
     if not query.strip():
         return []
 
@@ -93,6 +100,8 @@ def recall_memories(core: Any, query: str) -> list[dict]:
             None,           # embedding_param
             RECALL_LIMIT,
             seen,
+            tenant_id=tenant_id,
+            user_id=user_id,
         )
         results.extend(vec_results)
 
@@ -100,7 +109,11 @@ def recall_memories(core: Any, query: str) -> list[dict]:
     if graph is not None:
         remaining = max(0, RECALL_LIMIT - len(results))
         if remaining:
-            kw_results = _graph_keyword_search(graph, query, remaining, seen)
+            kw_results = _graph_keyword_search(
+                graph, query, remaining, seen,
+                tenant_id=tenant_id,
+                user_id=user_id,
+            )
             results.extend(kw_results)
 
     deduped, _ = _dedupe_results(results)
@@ -110,8 +123,15 @@ def recall_memories(core: Any, query: str) -> list[dict]:
     return deduped[:RECALL_LIMIT]
 
 
-def store_memory(core: Any, content: str, tags: list[str] | None = None) -> str | None:
-    """Lưu một ký ức mới vào AutoMem."""
+def store_memory(
+    core: Any,
+    content: str,
+    *,
+    tenant_id: str,
+    user_id: str,
+    tags: list[str] | None = None,
+) -> str | None:
+    """Lưu một ký ức mới vào AutoMem, gắn tenant_id + user_id."""
     graph = core.get_memory_graph()
     if graph is None:
         logger.warning("FalkorDB không khả dụng, bỏ qua lưu bộ nhớ")
@@ -142,7 +162,9 @@ def store_memory(core: Any, content: str, tags: list[str] | None = None) -> str 
                 m.updated_at   = $timestamp,
                 m.last_accessed = $timestamp,
                 m.metadata     = $metadata,
-                m.processed    = false
+                m.processed    = false,
+                m.tenant_id    = $tenant_id,
+                m.user_id      = $user_id
             """,
             {
                 "id": memory_id,
@@ -154,6 +176,8 @@ def store_memory(core: Any, content: str, tags: list[str] | None = None) -> str 
                 "type": memory_type,
                 "confidence": confidence,
                 "metadata": _json.dumps({"session": SESSION_ID}),
+                "tenant_id": tenant_id,
+                "user_id": user_id,
             },
         )
     except Exception:
@@ -204,7 +228,7 @@ def chat_with_ollama(
         "messages": messages,
         "stream": stream,
         "options": {
-            "temperature": 0.7,
+            "temperature": 0.5,
             "num_predict": 1024,
         },
     }
@@ -239,7 +263,7 @@ def chat_with_ollama(
 
             if chunk.get("done"):
                 break
-        print()  # newline sau khi stream xong
+        print()
     else:
         data = response.json()
         full_response = data.get("message", {}).get("content", "")
@@ -274,6 +298,7 @@ def build_memory_content(user_msg: str, assistant_msg: str) -> str:
 def main() -> None:
     print("=" * 60)
     print(f"  AutoMem Chat  |  Model: {CHAT_MODEL}  |  Session: {SESSION_ID}")
+    print(f"  Tenant: {TENANT_ID}  |  User: {USER_ID}")
     print("=" * 60)
     print("Lệnh: /quit — thoát | /memory — xem bộ nhớ gần đây | /clear — xóa lịch sử chat")
     print()
@@ -324,7 +349,7 @@ def main() -> None:
                 print("[AutoMem không khả dụng]")
                 continue
             query = user_input[7:].strip() or "session"
-            mems = recall_memories(core, query)
+            mems = recall_memories(core, query, tenant_id=TENANT_ID, user_id=USER_ID)
             if not mems:
                 print("[Chưa có bộ nhớ nào]")
             else:
@@ -335,7 +360,9 @@ def main() -> None:
         memory_context = ""
         if core is not None:
             try:
-                relevant = recall_memories(core, user_input)
+                relevant = recall_memories(
+                    core, user_input, tenant_id=TENANT_ID, user_id=USER_ID,
+                )
                 memory_context = format_memories_for_prompt(relevant)
                 if memory_context:
                     logger.debug("Recalled %d memories", len(relevant))
@@ -373,7 +400,13 @@ def main() -> None:
         if core is not None and should_store(user_input, assistant_reply):
             try:
                 content = build_memory_content(user_input, assistant_reply)
-                mem_id = store_memory(core, content, tags=["chat", f"session:{SESSION_ID}"])
+                mem_id = store_memory(
+                    core,
+                    content,
+                    tenant_id=TENANT_ID,
+                    user_id=USER_ID,
+                    tags=["chat", f"session:{SESSION_ID}"],
+                )
                 if mem_id:
                     logger.debug("Stored memory %s", mem_id)
             except Exception:

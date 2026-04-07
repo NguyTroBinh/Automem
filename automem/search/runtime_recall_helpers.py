@@ -5,6 +5,8 @@ from typing import Any, Callable, Dict, List, Optional
 from flask import abort, request
 from qdrant_client import QdrantClient
 
+from automem.utils.tenant import tenant_where
+
 _parse_iso_datetime: Optional[Callable[[Any], Optional[Any]]] = None
 _prepare_tag_filters: Optional[Callable[[Optional[List[str]]], List[str]]] = None
 _build_graph_tag_predicate: Optional[Callable[[str, str], str]] = None
@@ -201,6 +203,9 @@ def _graph_trending_results(
     tag_filters: Optional[List[str]] = None,
     tag_mode: str = "any",
     tag_match: str = "prefix",
+    *,
+    tenant_id: Optional[str] = None,
+    user_id: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     prepare_tag_filters = _prepare_tag_filters
     build_graph_tag_predicate = _build_graph_tag_predicate
@@ -223,6 +228,15 @@ def _graph_trending_results(
 
         where_clauses = ["coalesce(m.archived, false) = false"]
         params: Dict[str, Any] = {"limit": limit}
+
+        # --- Multi-tenancy filter ---
+        if tenant_id is not None:
+            where_clauses.append("m.tenant_id = $tenant_id")
+            params["tenant_id"] = tenant_id
+        if user_id is not None:
+            where_clauses.append("m.user_id = $user_id")
+            params["user_id"] = user_id
+
         if start_time:
             where_clauses.append("m.timestamp >= $start_time")
             params["start_time"] = start_time
@@ -270,6 +284,9 @@ def _graph_keyword_search(
     tag_filters: Optional[List[str]] = None,
     tag_mode: str = "any",
     tag_match: str = "prefix",
+    *,
+    tenant_id: Optional[str] = None,
+    user_id: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     extract_keywords = _extract_keywords
     prepare_tag_filters = _prepare_tag_filters
@@ -294,6 +311,8 @@ def _graph_keyword_search(
             tag_filters,
             tag_mode,
             tag_match,
+            tenant_id=tenant_id,
+            user_id=user_id,
         )
 
     keywords = extract_keywords(normalized)
@@ -302,6 +321,15 @@ def _graph_keyword_search(
     try:
         base_where = ["m.content IS NOT NULL", "coalesce(m.archived, false) = false"]
         params: Dict[str, Any] = {"limit": limit}
+
+        # --- Multi-tenancy filter ---
+        if tenant_id is not None:
+            base_where.append("m.tenant_id = $tenant_id")
+            params["tenant_id"] = tenant_id
+        if user_id is not None:
+            base_where.append("m.user_id = $user_id")
+            params["user_id"] = user_id
+
         if start_time:
             base_where.append("m.timestamp >= $start_time")
             params["start_time"] = start_time
@@ -365,6 +393,8 @@ def _graph_keyword_search(
                 tag_filters,
                 tag_mode,
                 tag_match,
+                tenant_id=tenant_id,
+                user_id=user_id,
             )
     except Exception:
         logger.exception("Graph keyword search failed")
@@ -389,6 +419,9 @@ def _vector_filter_only_tag_search(
     tag_match: str,
     limit: int,
     seen_ids: set[str],
+    *,
+    tenant_id: Optional[str] = None,
+    user_id: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     build_qdrant_tag_filter = _build_qdrant_tag_filter
     logger = _logger
@@ -399,7 +432,14 @@ def _vector_filter_only_tag_search(
     if qdrant_client is None or not tag_filters or limit <= 0:
         return []
 
-    query_filter = build_qdrant_tag_filter(tag_filters, tag_mode, tag_match)
+    tag_filter = build_qdrant_tag_filter(tag_filters, tag_mode, tag_match)
+
+    # --- Merge tenant filter ---
+    from automem.utils.tenant import build_qdrant_tenant_filter, merge_qdrant_filters
+    from qdrant_client import models as qdrant_models
+    tenant_filter = build_qdrant_tenant_filter(tenant_id, user_id, qdrant_models)
+    query_filter = merge_qdrant_filters(tag_filter, tenant_filter)
+
     if query_filter is None:
         return []
 
@@ -456,6 +496,9 @@ def _vector_search(
     tag_filters: Optional[List[str]] = None,
     tag_mode: str = "any",
     tag_match: str = "prefix",
+    *,
+    tenant_id: Optional[str] = None,
+    user_id: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     build_qdrant_tag_filter = _build_qdrant_tag_filter
     coerce_embedding = _coerce_embedding
@@ -494,7 +537,13 @@ def _vector_search(
     if not embedding:
         return []
 
-    query_filter = build_qdrant_tag_filter(tag_filters, tag_mode, tag_match)
+    tag_filter = build_qdrant_tag_filter(tag_filters, tag_mode, tag_match)
+
+    # --- Merge tenant filter ---
+    from automem.utils.tenant import build_qdrant_tenant_filter, merge_qdrant_filters
+    from qdrant_client import models as qdrant_models
+    tenant_filter = build_qdrant_tenant_filter(tenant_id, user_id, qdrant_models)
+    query_filter = merge_qdrant_filters(tag_filter, tenant_filter)
 
     try:
         vector_results = qdrant_client.search(

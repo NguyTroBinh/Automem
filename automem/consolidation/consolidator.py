@@ -5,6 +5,9 @@
 - creative (hàng tuần) : tổng hợp memories liên quan thành insight mới
 - cluster  (hàng tháng): gom nhóm memories tương đồng, tạo meta-memory
 - forget   (tắt mặc định): archive/xóa memory có importance quá thấp
+
+Multi-tenancy: mỗi instance được cấp ``tenant_id`` + ``user_id`` và
+tất cả Cypher query đều scoped theo cặp giá trị này.
 """
 
 from __future__ import annotations
@@ -52,6 +55,8 @@ class MemoryConsolidator:
         graph: Any,
         vector_store: Any,
         *,
+        tenant_id: Optional[str] = None,
+        user_id: Optional[str] = None,
         delete_threshold: float = 0.0,
         archive_threshold: float = 0.0,
         grace_period_days: int = 90,
@@ -62,6 +67,8 @@ class MemoryConsolidator:
     ) -> None:
         self.graph = graph
         self.vector_store = vector_store
+        self.tenant_id = tenant_id
+        self.user_id = user_id
         self.delete_threshold = delete_threshold
         self.archive_threshold = archive_threshold
         self.grace_period_days = grace_period_days
@@ -75,6 +82,32 @@ class MemoryConsolidator:
             task: {"interval": interval, "last_run": None}
             for task, interval in self.DEFAULT_INTERVALS.items()
         }
+
+    # ------------------------------------------------------------------
+    # Tenant helpers
+    # ------------------------------------------------------------------
+
+    def _tenant_where(self, alias: str = "m") -> str:
+        """Build a Cypher WHERE fragment for the current tenant+user scope."""
+        parts: list[str] = []
+        if self.tenant_id is not None:
+            parts.append(f"{alias}.tenant_id = $tenant_id")
+        if self.user_id is not None:
+            parts.append(f"{alias}.user_id = $user_id")
+        return " AND ".join(parts) if parts else ""
+
+    def _tenant_params(self) -> Dict[str, str]:
+        params: Dict[str, str] = {}
+        if self.tenant_id is not None:
+            params["tenant_id"] = self.tenant_id
+        if self.user_id is not None:
+            params["user_id"] = self.user_id
+        return params
+
+    def _and_tenant(self, alias: str = "m") -> str:
+        """Return ' AND <tenant_clause>' or empty string."""
+        tw = self._tenant_where(alias)
+        return f" AND {tw}" if tw else ""
 
     # ------------------------------------------------------------------
     # Public interface (được gọi bởi run_consolidation_tick)
@@ -165,14 +198,14 @@ class MemoryConsolidator:
 
         try:
             result = self.graph.query(
-                """
+                f"""
                 MATCH (m:Memory)
                 WHERE m.last_accessed < $cutoff
-                  AND coalesce(m.archived, false) = false
+                  AND coalesce(m.archived, false) = false{self._and_tenant()}
                 RETURN m.id, m.importance, m.last_accessed, m.type, m.timestamp
                 LIMIT 500
                 """,
-                {"cutoff": cutoff},
+                {"cutoff": cutoff, **self._tenant_params()},
             )
         except Exception as exc:
             raise RuntimeError(f"Decay query failed: {exc}") from exc
@@ -236,11 +269,11 @@ class MemoryConsolidator:
         """
         try:
             result = self.graph.query(
-                """
+                f"""
                 MATCH (m:Memory)-[:SIMILAR_TO]->(n:Memory)
                 WHERE m.type = n.type
                   AND coalesce(m.archived, false) = false
-                  AND coalesce(n.archived, false) = false
+                  AND coalesce(n.archived, false) = false{self._and_tenant()}
                 WITH m.type AS mem_type,
                      collect(DISTINCT m.id)[..10] AS ids,
                      collect(DISTINCT m.content)[..5] AS contents,
@@ -249,6 +282,7 @@ class MemoryConsolidator:
                 RETURN mem_type, ids, contents, avg_importance
                 LIMIT 10
                 """,
+                {**self._tenant_params()},
             )
         except Exception as exc:
             raise RuntimeError(f"Creative query failed: {exc}") from exc
@@ -262,9 +296,9 @@ class MemoryConsolidator:
             # Kiểm tra đã có meta-memory cho nhóm này chưa
             try:
                 check = self.graph.query(
-                    """
-                    MATCH (m:Memory {meta: true, source_type: $type})
-                    WHERE m.timestamp > $since
+                    f"""
+                    MATCH (m:Memory {{meta: true, source_type: $type}})
+                    WHERE m.timestamp > $since{self._and_tenant()}
                     RETURN m.id LIMIT 1
                     """,
                     {
@@ -272,6 +306,7 @@ class MemoryConsolidator:
                         "since": (
                             _utc_now() - timedelta(days=7)
                         ).isoformat(),
+                        **self._tenant_params(),
                     },
                 )
                 if getattr(check, "result_set", None):
@@ -288,9 +323,38 @@ class MemoryConsolidator:
 
             meta_id = str(uuid.uuid4())
             try:
+                # Build create params with tenant/user
+                create_params: Dict[str, Any] = {
+                    "id": meta_id,
+                    "content": summary,
+                    "type": "Insight",
+                    "importance": min(0.9, float(avg_importance or 0.5) + 0.1),
+                    "now": now_iso,
+                    "source_type": mem_type,
+                    "source_ids": list(ids or []),
+                    "tags": ["meta-memory", f"type:{mem_type.lower()}", "consolidation"],
+                    "tag_prefixes": ["meta-memory", f"type:{mem_type.lower()}", "consolidation"],
+                    "metadata": json.dumps({
+                        "consolidation": {
+                            "task": "creative",
+                            "source_count": len(ids or []),
+                            "source_type": mem_type,
+                        }
+                    }),
+                }
+
+                # Build SET clause for tenant/user
+                tenant_set = ""
+                if self.tenant_id is not None:
+                    create_params["tenant_id"] = self.tenant_id
+                    tenant_set += ",\n                        tenant_id: $tenant_id"
+                if self.user_id is not None:
+                    create_params["user_id"] = self.user_id
+                    tenant_set += ",\n                        user_id: $user_id"
+
                 self.graph.query(
-                    """
-                    CREATE (m:Memory {
+                    f"""
+                    CREATE (m:Memory {{
                         id: $id,
                         content: $content,
                         type: $type,
@@ -304,29 +368,11 @@ class MemoryConsolidator:
                         tags: $tags,
                         tag_prefixes: $tag_prefixes,
                         processed: false,
-                        metadata: $metadata
-                    })
+                        metadata: $metadata{tenant_set}
+                    }})
                     """,
-                    {
-                        "id": meta_id,
-                        "content": summary,
-                        "type": "Insight",
-                        "importance": min(0.9, float(avg_importance or 0.5) + 0.1),
-                        "now": now_iso,
-                        "source_type": mem_type,
-                        "source_ids": list(ids or []),
-                        "tags": ["meta-memory", f"type:{mem_type.lower()}", "consolidation"],
-                        "tag_prefixes": ["meta-memory", f"type:{mem_type.lower()}", "consolidation"],
-                        "metadata": json.dumps({
-                            "consolidation": {
-                                "task": "creative",
-                                "source_count": len(ids or []),
-                                "source_type": mem_type,
-                            }
-                        }),
-                    },
+                    create_params,
                 )
-                # Tạo DERIVED_FROM edges
                 for src_id in (ids or [])[:5]:
                     try:
                         self.graph.query(
@@ -359,16 +405,17 @@ class MemoryConsolidator:
         """
         try:
             result = self.graph.query(
-                """
+                f"""
                 MATCH (m:Memory)-[:SIMILAR_TO]->(n:Memory)
                 WHERE coalesce(m.archived, false) = false
-                  AND coalesce(m.meta, false) = false
+                  AND coalesce(m.meta, false) = false{self._and_tenant()}
                 WITH m, count(n) AS neighbor_count
                 WHERE neighbor_count >= 3
                 ORDER BY neighbor_count DESC
                 LIMIT 5
                 RETURN m.id, m.content, m.type, m.importance, neighbor_count
                 """,
+                {**self._tenant_params()},
             )
         except Exception as exc:
             raise RuntimeError(f"Cluster query failed: {exc}") from exc
@@ -399,11 +446,12 @@ class MemoryConsolidator:
             # Kiểm tra cluster đã tồn tại chưa
             try:
                 check = self.graph.query(
-                    """
-                    MATCH (m:Memory {cluster_hub: $hub_id})
+                    f"""
+                    MATCH (m:Memory {{cluster_hub: $hub_id}})
+                    WHERE true{self._and_tenant()}
                     RETURN m.id LIMIT 1
                     """,
-                    {"hub_id": hub_id},
+                    {"hub_id": hub_id, **self._tenant_params()},
                 )
                 if getattr(check, "result_set", None):
                     continue
@@ -417,9 +465,36 @@ class MemoryConsolidator:
             )
 
             try:
+                create_params: Dict[str, Any] = {
+                    "id": cluster_id,
+                    "content": cluster_content,
+                    "type": hub_type or "Context",
+                    "importance": min(0.85, float(hub_importance or 0.5) + 0.05),
+                    "now": now_iso,
+                    "hub_id": hub_id,
+                    "size": len(neighbor_ids) + 1,
+                    "tags": ["cluster", "consolidation", f"type:{(hub_type or 'context').lower()}"],
+                    "tag_prefixes": ["cluster", "consolidation"],
+                    "metadata": json.dumps({
+                        "consolidation": {
+                            "task": "cluster",
+                            "hub_id": hub_id,
+                            "cluster_size": len(neighbor_ids) + 1,
+                        }
+                    }),
+                }
+
+                tenant_set = ""
+                if self.tenant_id is not None:
+                    create_params["tenant_id"] = self.tenant_id
+                    tenant_set += ",\n                        tenant_id: $tenant_id"
+                if self.user_id is not None:
+                    create_params["user_id"] = self.user_id
+                    tenant_set += ",\n                        user_id: $user_id"
+
                 self.graph.query(
-                    """
-                    CREATE (c:Memory {
+                    f"""
+                    CREATE (c:Memory {{
                         id: $id,
                         content: $content,
                         type: $type,
@@ -433,29 +508,11 @@ class MemoryConsolidator:
                         tags: $tags,
                         tag_prefixes: $tag_prefixes,
                         processed: false,
-                        metadata: $metadata
-                    })
+                        metadata: $metadata{tenant_set}
+                    }})
                     """,
-                    {
-                        "id": cluster_id,
-                        "content": cluster_content,
-                        "type": hub_type or "Context",
-                        "importance": min(0.85, float(hub_importance or 0.5) + 0.05),
-                        "now": now_iso,
-                        "hub_id": hub_id,
-                        "size": len(neighbor_ids) + 1,
-                        "tags": ["cluster", "consolidation", f"type:{(hub_type or 'context').lower()}"],
-                        "tag_prefixes": ["cluster", "consolidation"],
-                        "metadata": json.dumps({
-                            "consolidation": {
-                                "task": "cluster",
-                                "hub_id": hub_id,
-                                "cluster_size": len(neighbor_ids) + 1,
-                            }
-                        }),
-                    },
+                    create_params,
                 )
-                # PART_OF edges từ members → cluster
                 for member_id in [hub_id] + neighbor_ids[:9]:
                     try:
                         self.graph.query(
@@ -493,12 +550,12 @@ class MemoryConsolidator:
 
         try:
             result = self.graph.query(
-                """
+                f"""
                 MATCH (m:Memory)
                 WHERE m.timestamp < $grace_cutoff
                   AND coalesce(m.archived, false) = false
                   AND coalesce(m.meta, false) = false
-                  AND m.importance < $max_threshold
+                  AND m.importance < $max_threshold{self._and_tenant()}
                 RETURN m.id, m.importance, m.type
                 LIMIT 200
                 """,
@@ -507,6 +564,7 @@ class MemoryConsolidator:
                     "max_threshold": max(
                         self.delete_threshold, self.archive_threshold
                     ),
+                    **self._tenant_params(),
                 },
             )
         except Exception as exc:
@@ -520,7 +578,6 @@ class MemoryConsolidator:
             memory_id, importance, mem_type = row[:3]
             imp = float(importance) if importance is not None else 0.0
 
-            # Bảo vệ
             if imp >= self.importance_protection_threshold:
                 skipped += 1
                 continue

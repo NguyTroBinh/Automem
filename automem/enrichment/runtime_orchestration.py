@@ -153,9 +153,9 @@ def enrich_memory(
     extract_entities_fn: Callable[[str], Dict[str, List[str]]],
     slugify_fn: Callable[[str], str],
     compute_tag_prefixes_fn: Callable[[List[str]], List[str]],
-    find_temporal_relationships_fn: Callable[[Any, str], int],
-    detect_patterns_fn: Callable[[Any, str, str], List[Dict[str, Any]]],
-    link_semantic_neighbors_fn: Callable[[Any, str], List[Tuple[str, float]]],
+    find_temporal_relationships_fn: Callable[..., int],
+    detect_patterns_fn: Callable[..., List[Dict[str, Any]]],
+    link_semantic_neighbors_fn: Callable[..., List[Tuple[str, float]]],
     enrichment_enable_summaries: bool,
     generate_summary_fn: Callable[[str, Any], Any],
     utc_now_fn: Callable[[], str],
@@ -178,6 +178,10 @@ def enrich_memory(
     properties = getattr(node, "properties", None)
     if not isinstance(properties, dict):
         properties = dict(getattr(node, "__dict__", {}))
+
+    # --- Read tenant context from the memory node ---
+    mem_tenant_id: Optional[str] = properties.get("tenant_id")
+    mem_user_id: Optional[str] = properties.get("user_id")
 
     metadata_raw = properties.get("metadata")
     metadata = parse_metadata_field_fn(metadata_raw) or {}
@@ -213,9 +217,16 @@ def enrich_memory(
 
     tag_prefixes = compute_tag_prefixes_fn(tags)
 
-    temporal_links = find_temporal_relationships_fn(graph, memory_id)
-    pattern_info = detect_patterns_fn(graph, memory_id, content)
-    semantic_neighbors = link_semantic_neighbors_fn(graph, memory_id)
+    # --- Pass tenant context to sub-functions ---
+    temporal_links = find_temporal_relationships_fn(
+        graph, memory_id, tenant_id=mem_tenant_id, user_id=mem_user_id,
+    )
+    pattern_info = detect_patterns_fn(
+        graph, memory_id, content, tenant_id=mem_tenant_id, user_id=mem_user_id,
+    )
+    semantic_neighbors = link_semantic_neighbors_fn(
+        graph, memory_id, tenant_id=mem_tenant_id, user_id=mem_user_id,
+    )
 
     if enrichment_enable_summaries:
         existing_summary = properties.get("summary")

@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-from typing import List, Optional
+from typing import Any, List, Optional
 
 from qdrant_client import models as qdrant_models
 
 from automem.utils.tags import _prepare_tag_filters
+from automem.utils.tenant import build_qdrant_tenant_filter, merge_qdrant_filters
 
 
 def _build_qdrant_tag_filter(
@@ -42,3 +43,20 @@ def _build_qdrant_tag_filter(
     ]
 
     return qdrant_models.Filter(must=must_conditions)
+
+
+def _build_qdrant_search_filter(
+    tags: Optional[List[str]],
+    mode: str = "any",
+    match: str = "exact",
+    *,
+    tenant_id: Optional[str] = None,
+    user_id: Optional[str] = None,
+) -> Any:
+    """Build a combined Qdrant filter including tag constraints AND tenant/user isolation.
+
+    This is the preferred entry-point for all search/recall queries.
+    """
+    tag_filter = _build_qdrant_tag_filter(tags, mode, match)
+    tenant_filter = build_qdrant_tenant_filter(tenant_id, user_id, qdrant_models)
+    return merge_qdrant_filters(tag_filter, tenant_filter)

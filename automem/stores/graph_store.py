@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from automem.utils.tenant import tenant_where as _build_graph_tenant_where
+
 
 def _build_graph_tag_predicate(tag_mode: str, tag_match: str) -> str:
     """Construct a Cypher predicate for tag filtering with mode/match semantics.

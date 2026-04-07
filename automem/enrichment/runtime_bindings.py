@@ -22,9 +22,9 @@ class EnrichmentRuntimeBindings:
     jit_enrich_lightweight: Callable[[str, Dict[str, Any]], Optional[Dict[str, Any]]]
     enrich_memory: Callable[..., bool]
     temporal_cutoff: Callable[[], str]
-    find_temporal_relationships: Callable[[Any, str, int], int]
-    detect_patterns: Callable[[Any, str, str], List[Dict[str, Any]]]
-    link_semantic_neighbors: Callable[[Any, str], List[Tuple[str, float]]]
+    find_temporal_relationships: Callable[..., int]
+    detect_patterns: Callable[..., List[Dict[str, Any]]]
+    link_semantic_neighbors: Callable[..., List[Tuple[str, float]]]
 
 
 def create_enrichment_runtime(
@@ -50,7 +50,14 @@ def create_enrichment_runtime(
     def temporal_cutoff() -> str:
         return _temporal_cutoff_runtime()
 
-    def find_temporal_relationships(graph: Any, memory_id: str, limit: int = 5) -> int:
+    def find_temporal_relationships(
+        graph: Any,
+        memory_id: str,
+        limit: int = 5,
+        *,
+        tenant_id: Optional[str] = None,
+        user_id: Optional[str] = None,
+    ) -> int:
         return _find_temporal_relationships_runtime(
             graph=graph,
             memory_id=memory_id,
@@ -58,9 +65,18 @@ def create_enrichment_runtime(
             cutoff_fn=temporal_cutoff,
             utc_now_fn=utc_now_fn,
             logger=logger,
+            tenant_id=tenant_id,
+            user_id=user_id,
         )
 
-    def detect_patterns(graph: Any, memory_id: str, content: str) -> List[Dict[str, Any]]:
+    def detect_patterns(
+        graph: Any,
+        memory_id: str,
+        content: str,
+        *,
+        tenant_id: Optional[str] = None,
+        user_id: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
         return _detect_patterns_runtime(
             graph=graph,
             memory_id=memory_id,
@@ -69,9 +85,17 @@ def create_enrichment_runtime(
             search_stopwords=search_stopwords,
             utc_now_fn=utc_now_fn,
             logger=logger,
+            tenant_id=tenant_id,
+            user_id=user_id,
         )
 
-    def link_semantic_neighbors(graph: Any, memory_id: str) -> List[Tuple[str, float]]:
+    def link_semantic_neighbors(
+        graph: Any,
+        memory_id: str,
+        *,
+        tenant_id: Optional[str] = None,
+        user_id: Optional[str] = None,
+    ) -> List[Tuple[str, float]]:
         return _link_semantic_neighbors_runtime(
             graph=graph,
             memory_id=memory_id,
@@ -81,6 +105,8 @@ def create_enrichment_runtime(
             similarity_threshold=enrichment_similarity_threshold,
             utc_now_fn=utc_now_fn,
             logger=logger,
+            tenant_id=tenant_id,
+            user_id=user_id,
         )
 
     def jit_enrich_lightweight(

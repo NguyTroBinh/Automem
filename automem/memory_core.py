@@ -465,7 +465,12 @@ class MemoryCore:
             CONSOLIDATION_TASK_FIELDS,
         )
 
-        def _build_scheduler_from_graph(graph: Any) -> Any:
+        def _build_scheduler_from_graph(
+            graph: Any,
+            *,
+            tenant_id: str | None = None,
+            user_id: str | None = None,
+        ) -> Any:
             try:
                 from automem.consolidation.consolidator import MemoryConsolidator
             except ImportError:
@@ -493,6 +498,8 @@ class MemoryCore:
                 protected_types=CONSOLIDATION_PROTECTED_TYPES,
                 base_decay_rate=CONSOLIDATION_BASE_DECAY_RATE,
                 importance_floor_factor=CONSOLIDATION_IMPORTANCE_FLOOR_FACTOR,
+                tenant_id=tenant_id,
+                user_id=user_id,
             )
 
             apply_scheduler_overrides(

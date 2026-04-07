@@ -152,8 +152,26 @@ def store_embedding_in_qdrant(
 
     node = result.result_set[0][0]
     properties = getattr(node, "properties", {})
+
+    # --- Debug: trace property values for multi-tenancy diagnosis ---
+    _tid = properties.get("tenant_id", "")
+    _uid = properties.get("user_id", "")
+    logger.info(
+        "Embedding store for %s: tenant_id=%r, user_id=%r, properties_keys=%s, metadata_type=%s",
+        memory_id, _tid, _uid, list(properties.keys()) if isinstance(properties, dict) else type(properties).__name__,
+        type(properties.get("metadata")).__name__,
+    )
+
     try:
-        metadata_payload = json.loads(properties.get("metadata", "{}"))
+        raw_metadata = properties.get("metadata", "{}")
+        if isinstance(raw_metadata, dict):
+            # FalkorDB đã trả về dict trực tiếp (sau enrichment), không cần json.loads
+            metadata_payload = raw_metadata
+        elif isinstance(raw_metadata, str):
+            metadata_payload = json.loads(raw_metadata)
+        else:
+            logger.warning("Unexpected metadata type %s for %s", type(raw_metadata).__name__, memory_id)
+            metadata_payload = {}
     except (json.JSONDecodeError, TypeError):
         logger.warning("Malformed metadata JSON for %s; defaulting to empty object", memory_id)
         metadata_payload = {}
@@ -166,6 +184,8 @@ def store_embedding_in_qdrant(
                     id=memory_id,
                     vector=embedding,
                     payload={
+                        "tenant_id": _tid,
+                        "user_id": _uid,
                         "content": properties.get("content", content),
                         "tags": properties.get("tags", []),
                         "tag_prefixes": properties.get("tag_prefixes", []),
@@ -181,7 +201,7 @@ def store_embedding_in_qdrant(
                 )
             ],
         )
-        logger.info("Stored embedding for %s in Qdrant", memory_id)
+        logger.info("Stored embedding for %s in Qdrant (tenant=%s, user=%s)", memory_id, _tid, _uid)
     except Exception:  # pragma: no cover
         logger.exception("Qdrant upsert failed for %s", memory_id)
 

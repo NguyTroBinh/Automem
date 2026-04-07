@@ -196,10 +196,14 @@ def build_consolidator_from_config(
     protected_types: Set[str],
     base_decay_rate: float = 0.01,
     importance_floor_factor: float = 0.3,
+    tenant_id: str | None = None,
+    user_id: str | None = None,
 ) -> Any:
     return memory_consolidator_cls(
         graph,
         vector_store,
+        tenant_id=tenant_id,
+        user_id=user_id,
         delete_threshold=delete_threshold,
         archive_threshold=archive_threshold,
         grace_period_days=grace_period_days,
@@ -208,3 +212,4 @@ def build_consolidator_from_config(
         base_decay_rate=base_decay_rate,
         importance_floor_factor=importance_floor_factor,
     )
+
